@@ -1,0 +1,6 @@
+{
+  "name": "Sandbox Defense Browser",
+  "description": "Securely analyze phishing/scam URLs in an isolated server-side sandbox. Preview visual page components, analyze system behavioral signals, detect threat signatures, and view comprehensive risk safety reports without direct device risk.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
