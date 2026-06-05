@@ -18,13 +18,21 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # 1. 設定 Git 使用者資訊防止 push 失敗
+          # 1. 檢查 HF_TOKEN 是否有設定（防止 Secret 設定錯誤或打錯字）
+          if [ -z "$HF_TOKEN" ]; then
+            echo "❌ 錯誤：找不到 HF_TOKEN。請確認您已在 GitHub 專案的 Settings -> Secrets and variables -> Actions 中新增名為 HF_TOKEN 的 Repository Secret。"
+            exit 1
+          fi
+          
+          # 2. 設定 Git 使用者資訊
           git config --global user.email "deploy-bot@huggingface.co"
           git config --global user.name "HuggingFace Deploy Bot"
           
-          # 2. 加入 Hugging Face Space 的 Remote，使用剛剛儲存的 HF_TOKEN 進行驗證
-          # 請確認下方 URL 中的 "shaohan-webdesign" 與 "web-sandbox-testing" 是否與您在 Hugging Face 建立的一致
-          git remote add hf https://shaohan-webdesign:${HF_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing
+          echo "ℹ️ 正在準備推送至 Hugging Face Space..."
           
-          # 3. 強制推送到 Hugging Face 的 main 分支
-          git push --force hf HEAD:main
+          # 3. 使用 oauth2 為使用者名稱進行推送，這在 Hugging Face API Token 中最為穩定
+          # 這可以避免因使用者名稱大小寫或特殊字元造成的驗證失敗
+          git push --force "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing" HEAD:main
+          
+          echo "🎉 推送完成！"
+
