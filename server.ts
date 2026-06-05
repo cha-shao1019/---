@@ -93,10 +93,10 @@ app.post("/api/sandbox/analyze", async (req, res) => {
     // Dynamic website check
     const probe = await probeUrl(cleanUrl);
 
-    // Call Gemini to reconstruct the site behavior, layout and warnings
+    // Call Gemini to reconstruct the site behavior, layout and warnings with non-biased, dual-path assessment principles
     const prompt = `
-You are an advanced isolated safety browser virtual sandbox (防詐沙盒虛擬瀏覽器).
-Your job is to analyze the following target URL and return a highly detailed sandbox behavior report, risk indicators, and simulated static screenshot mockup of what the webpage looks like inside a secure environment.
+You are an advanced isolated safety browser virtual sandbox (防詐沙盒虛擬瀏覽器) in Taiwan.
+Your absolute goal is to construct a HIGHLY ACCURATE, CRITICALLY UNBIASED, and HONEST security/behavior assessment of the target URL.
 
 Target URL: "${cleanUrl}"
 Real Probe Status: ${probe.isReachable ? "REACHABLE" : "UNREACHABLE / OFFLINE"}
@@ -105,21 +105,36 @@ Real Web-Scrape Clues:
 ${probe.htmlSnippets}
 \`\`\`
 
-If the Real Web-Scrape is Reachable, utilize its headers, titles, and text contents (e.g. keywords, brand names, bank logos) to discover fraud mimicries. 
-If the Real Web-Scrape is Unreachable or Offline, apply expert heuristic and lexical threat patterns. Analyze the domain URL string structure (e.g. misspelled subdomains, suspicious TLDs like .top, .cc, .xyz, weird paths like /line_login, /shopee301, brand impersonations of major entities like 中華郵政, 綠界, LINE Pay, 國泰世華銀行, 蝦皮購物, 富邦銀行, 監理站, 財政部全球資訊網, or popular web investment hubs).
+=========================================
+🛡️ 【CRITICAL CLASSIFICATION INSTRUCTIONS - 雙向中立安全評估原則】
+=========================================
+DO NOT assume every website is a scam or a threat! You must separate LEGITIMATE/SAFE websites from REAL PHISHING/MALICIOUS sites.
 
-Generate a complete, simulated safety analysis report answering the schema structure. Under no circumstances should you generate markdown wrapper text outside the JSON. Return a perfectly parseable JSON output representing Taiwanese target phishing or high-risk scam features context.
+1. ✅ LEGITIMATE & SAFE WEBSITES (常規安全網站 / 正常個人網站 / 官方入口 / 部落格):
+   - Criteria: The website layout, URL, domain, or DOM content is standard, informative, OR the domain is the EXACT official domain of a Taiwanese brand (e.g. "line.me", "cubetw.com.tw", "cathaybk.com.tw", "post.gov.tw", "gov.tw", "github.com", "google.com", etc.), OR it is simply a standard personal showcase/home Page/blog showing custom portfolio, with NO signs of brand impersonation, deceptive bank-login layout, or aggressive mobile payment OTP fraud.
+   - Outputs:
+     - threatScore: MUST be very low (between 0 and 15, ideally 0-5 for official platforms).
+     - verdict: "SAFE".
+     - category: "Safe / Informational".
+     - mismatchedBrand: "None".
+     - summary: Write a highly objective, polite, professional, and positive review in Traditional Chinese (繁體中文). Explain that "經沙盒智慧分析，此網域/網頁結構正常且安全，未發現任何冒用知名品牌、偽裝首頁、釣魚驗證表單或跨站惡意 API 行為。網站能防禦惡意嗅探，可安全瀏覽。"
+     - threatAnalysis: Set standard explanatory text of safe structures. The entries (domainRisk, credentialHarvest, urgencyManipulation, unauthorizedMimicry) must explicitly state "無此威脅/結構安全/域名信譽正常".
+     - systemReport: "apiCallsDetected" MUST NOT contain fake evil domains! Set it as empty [] or only realistic static tracking/hosting endpoints if visible in raw scrape clues. "apkPayloadDetected" must be false.
+     - visualMockup: Draw a normal, beautiful, and realistic mockup based on the HTML metadata/title (e.g., standard blog, portfolio, or landing page). For mock 'elements', do NOT include fake input fields demanding OTP or credit card credentials unless they actually exist. Use normal nav links, buttons, or heading texts. Their 'hazardSeverity' MUST be "none" (or "low" at most for standard public inputs), and their 'riskLabel' should be reassuringly neutral, e.g., "常規網頁連結，與安全服務器傳輸，無威脅" or "安全按鈕".
+     
+2. ⚠️ SUSPICIOUS / EXTREME PHISHING WEBSITES (真實釣魚或惡意網站):
+   - Criteria: The URL mimics a well-known brand but is hosted on a mismatching, suspicious domain (e.g., "cathaybk-verification.top", "line-pay-login.xyz", "taiwan-post-office-parcel.cc", "gov-tw-tax.work", etc.), AND/OR the page aggressively demands inputs of sensitive data like OTP (簡訊驗證碼), Bank login details (網銀代號/密碼), Identity Cards (身分證字號), or complete Credit Card numbers + CVV with high urgency and threat words ("若不更正將即刻扣款/解除合約").
+   - Outputs:
+     - threatScore: High (80 to 100).
+     - verdict: "MALICIOUS" or "CRITICAL_THREAT".
+     - category: Match the appropriate category like "Phishing Card", "Account Impersonation", etc.
+     - mismatchedBrand: Specify the faked brand (e.g. "中華郵政", "國泰世華銀行", "LINE Pay", "富邦銀行", "監理站", "台灣電力公司").
+     - summary: Reconstruct the scam's deceptive behavior, visual faking tricks, and threat vectors in details in Traditional Chinese.
+     - threatAnalysis: Fill in real expert breakdown of faking elements.
+     - systemReport: Simulate potential malicious API endpoints (redirect chains, leak points).
+     - visualMockup: Reconstruct the phishing layout highlighting the hazardous form inputs, and provide matching high-risk warnings, assigning "critical" or "high" to 'hazardSeverity', with explicit "riskLabel" warning details in Traditional Chinese.
 
-Please structure the "visualMockup" object to recreate the simulated screen visually:
-- Choose an appropriate 'backgroundColor' matching the brand color palette (e.g. LINE = '#00c300', 中華郵政 = '#008453', Cathay Bank = '#fdf200' or '#015435', Shopee = '#ee4d2d', Netflix = '#e50914', custom fake pages = e.g. '#1e293b' gray/blue).
-- Include standard mock page form factors such as mock 'elements' for:
-  - logos, headings, inputs (like '用戶編號', '密碼', '身份證字號', '信用卡號', '驗證驗碼 OTP'), buttons (like '確認登入', '申請退稅', '領取紅包'), text warnings, or unrequested alert overlays.
-  - For each mockup visual element, provide:
-    - 'type': 'logo' | 'input' | 'button' | 'text' | 'form_field' | 'warning_overlay'
-    - 'label': Element label text (in Traditional Chinese 繁體中文)
-    - 'placeholder': Placeholder if raw input
-    - 'riskLabel': Explanatory high-risk note on why this input/logo is dangerous or faked inside a scam page (Traditional Chinese, e.g. '此處騙取悠遊卡密碼與驗證簡訊', '網頁偽造中華郵政經典標誌讓您卸下心防')
-    - 'hazardSeverity': 'none' | 'low' | 'high' | 'critical'
+Ensure the final JSON is perfectly valid. Do not inject any markdown wrap (such as \`\`\`json) before or after the JSON.
 `;
 
     const response = await ai.models.generateContent({

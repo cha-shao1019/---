@@ -36,8 +36,14 @@ jobs:
           
           # 3. 確保 README.md 包含正確的 Hugging Face YAML Frontmatter
           # 避免 AI Studio 在導出/同步到 GitHub 時，自動覆寫 README.md 並洗掉部署 YAML
-          echo "📝 偵測到 README.md，正在為其注入最新的 Hugging Face YAML 設定..."
-          cat << 'EOF' > temp_readme.md
+          echo "📝 偵測並更新 README.md，確保含有正確的 Hugging Face YAML 設定..."
+          if [ -f README.md ]; then
+            # 檢查 README.md 是否有包含 sdk: docker 標籤
+            if grep -q "sdk: docker" README.md; then
+              echo "✅ README.md 已經包含 Hugging Face 設定，不做重複注入。"
+            else
+              echo "📝 正在為 README.md 注入 YAML 檔頭..."
+              cat << 'EOF' > temp_readme.md
 ---
 title: Web Sandbox Testing
 emoji: 🚀
@@ -49,19 +55,26 @@ pinned: false
 ---
 
 EOF
-
-          if [ -f README.md ]; then
-            # 如果 README.md 本身已經有 YAML 檔頭，我們使用 awk 完美將其剝離後再附加，防止重複疊加
-            if head -n 1 README.md | grep -q "^---"; then
-              echo "🧹 移去現有的舊版 Frontmatter..."
-              awk 'BEGIN {show=0} /^---$/ {show++; next} show>=2 {print} show<2 && !/^---$/ && show>0 {next} show==0 {print}' README.md >> temp_readme.md
-            else
               cat README.md >> temp_readme.md
+              mv temp_readme.md README.md
             fi
           else
-            echo "# Web Sandbox Testing" >> temp_readme.md
+            echo "📝 找不到 README.md，建立預設之 README.md..."
+            cat << 'EOF' > README.md
+---
+title: Web Sandbox Testing
+emoji: 🚀
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
+# Web Sandbox Testing
+這是一個部署在 Hugging Face Spaces 上的 Docker 應用程式。
+EOF
           fi
-          mv temp_readme.md README.md
 
           # 4. 設定 Git 使用者資訊並建立 Commit
           git config --global user.email "deploy-bot@huggingface.co"
@@ -76,21 +89,40 @@ EOF
           echo "🚀 正在推送最新程式碼至 Hugging Face Space main 分支..."
           HF_REPO_URL="https://oauth2:${CLEANED_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing"
           
-          if git push --force "$HF_REPO_URL" HEAD:main 2>git_push_error.log; then
-            echo "🎉 恭喜！已成功成功推送部署至 Hugging Face Space main 分支！"
+          # 建立備份機制：優先不強推 (可能與遠端不衝突的情況)
+          # 如果正常推送失敗，再嘗試強制推送。這能解決遠端分支保護或衝突的問題
+          PUSH_OK=false
+          
+          echo "👉 嘗試正常 Fast-Forward 推送..."
+          if git push "$HF_REPO_URL" HEAD:main 2>git_push_norm_err.log; then
+            echo "🎉 [正常推送] 成功部署至 Hugging Face Space main 分支！"
+            PUSH_OK=true
           else
-            echo "❌ 部署失敗！錯誤訊息如下："
-            cat git_push_error.log
-            echo ""
+            echo "⚠️ [正常推送] 失敗，訊息如下："
+            cat git_push_norm_err.log
+            
+            echo "👉 [備份方案] 嘗試使用 Force-Push 強制推送覆寫..."
+            if git push --force "$HF_REPO_URL" HEAD:main 2>git_push_force_err.log; then
+              echo "🎉 [強制推送] 成功強制覆寫部署至 Hugging Face Space main 分支！"
+              PUSH_OK=true
+            else
+              echo "❌ [強制推送] 失敗，訊息如下："
+              cat git_push_force_err.log
+            fi
+          fi
+          
+          if [ "$PUSH_OK" = "false" ]; then
+            echo "❌ 所有推送手法均失敗！"
             echo "================================================================"
-            echo "💡 【如何排查與解決驗證失敗或路徑問題】"
+            echo "💡 【如何手動排查與自我修復】"
             echo "================================================================"
-            echo "1. 您的 HF_TOKEN 權限（最常見原因）："
-            echo "   👉 請確認此 Token 在 Hugging Face 申請時具有 'Write' (寫入) 權限，而不是 'Read'。"
-            echo "2. 檢查 GitHub Secret 設定："
-            echo "   👉 請確認 GitHub 專案 Settings -> Secrets and variables -> Actions 中有一項名為 'HF_TOKEN' 的 Secret。"
-            echo "3. 檢查 Space 的存在與名稱："
-            echo "   👉 請確認您的 Space 名稱是否與 'shaohan-webdesign/web-sandbox-testing' 完全相符。"
+            echo "1. 您的 HF_TOKEN 權限：請確認此 Token 在 Hugging Face (Settings -> Access Tokens)"
+            echo "   必須具有 'Write' (寫入) 權限，而不是僅有 'Read' 權限。"
+            echo "2. 檢查 GitHub Secret 設定：請確認專案 Settings -> Secrets and variables -> Actions 中"
+            echo "   有一項最上層的 Repository secret 名為 'HF_TOKEN'，內容為您的 HF Token 字串。"
+            echo "3. 您可以直接在 Hugging Face 網頁上修改檔案："
+            echo "   👉 請直接點擊您 Space 頂部的 'Files' 分頁。"
+            echo "   👉 點擊並編輯 'README.md'，將頂部的 YAML Frontmatter 貼上，儲存後即刻重啟！"
             echo "================================================================"
             exit 1
           fi
