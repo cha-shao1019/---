@@ -27,7 +27,6 @@ jobs:
           fi
           
           # 2. 自動檢查 Token 長度與格式，提供友善警告
-          # 移除可能不小心複製進來的換行或空白
           CLEANED_TOKEN=$(echo -n "$HF_TOKEN" | tr -d '\r\n[:space:]')
           
           if [[ ! "$CLEANED_TOKEN" =~ ^hf_ ]]; then
@@ -35,20 +34,10 @@ jobs:
             echo "💡 請確認您複製的是完整的 Token，並且沒有不小心貼成其他字串（例如 Space 的 URL 或 Username）。"
           fi
           
-          # 3. 設定 Git 使用者資訊
-          git config --global user.email "deploy-bot@huggingface.co"
-          git config --global user.name "HuggingFace Deploy Bot"
-          
-          # 解決可能的 credential 衝突
-          git config --global --unset-all credential.helper || true
-          
-          # 3.5. 常態性檢查與注入 Hugging Face YAML Frontmatter 到 README.md
-          # 避免 AI Studio 在匯出/同步到 GitHub 時，自動覆寫 README.md 並洗掉部署 YAML
-          if [ -f README.md ] && grep -q "sdk: docker" README.md; then
-            echo "✅ README.md 已經含有適當的 Hugging Face 設定，保留原樣。"
-          else
-            echo "📝 偵測到 README.md 缺少 Hugging Face YAML 開頭區塊，正在為其注入..."
-            cat << 'EOF' > temp_readme.md
+          # 3. 確保 README.md 包含正確的 Hugging Face YAML Frontmatter
+          # 避免 AI Studio 在導出/同步到 GitHub 時，自動覆寫 README.md 並洗掉部署 YAML
+          echo "📝 偵測到 README.md，正在為其注入最新的 Hugging Face YAML 設定..."
+          cat << 'EOF' > temp_readme.md
 ---
 title: Web Sandbox Testing
 emoji: 🚀
@@ -60,105 +49,48 @@ pinned: false
 ---
 
 EOF
-            if [ -f README.md ]; then
+
+          if [ -f README.md ]; then
+            # 如果 README.md 本身已經有 YAML 檔頭，我們使用 awk 完美將其剝離後再附加，防止重複疊加
+            if head -n 1 README.md | grep -q "^---"; then
+              echo "🧹 移去現有的舊版 Frontmatter..."
+              awk 'BEGIN {show=0} /^---$/ {show++; next} show>=2 {print} show<2 && !/^---$/ && show>0 {next} show==0 {print}' README.md >> temp_readme.md
+            else
               cat README.md >> temp_readme.md
-            else
-              echo "# Web Sandbox Testing" >> temp_readme.md
             fi
-            mv temp_readme.md README.md
-            
-            git add README.md
-            git commit -m "chore: inject hugging face configuration header [skip ci]" || true
-            echo "✅ README.md 已成功注入 YAML Frontmatter 並完成本地提交！"
-          fi
-
-          echo "ℹ️ 正在推送至 Hugging Face Space (shaohan-webdesign/web-sandbox-testing)..."
-          
-          HF_REPO_URL="https://oauth2:${CLEANED_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing"
-          DEPLOY_SUCCESS=false
-
-          echo "🚀 [方法 A] 嘗試拷貝現有 Hugging Face 歷史紀錄並推入變更 (安全，避開 Default Branch Protection)..."
-          if git clone --depth 1 -b main "$HF_REPO_URL" hf_space_sync 2>git_clone_error.log; then
-            echo "✅ 成功複製 Hugging Face Space 的 main 分支！"
-            
-            # 設定使用者資訊以利在此目錄中提交
-            cd hf_space_sync
-            git config user.email "deploy-bot@huggingface.co"
-            git config user.name "HuggingFace Deploy Bot"
-            
-            echo "🧹 正在清除舊有檔案（保留 .git 暫存）..."
-            find . -maxdepth 1 ! -name '.git' ! -name '.' -exec rm -rf {} +
-            
-            echo "📦 拷貝最新專案檔案至同步目錄..."
-            cd ..
-            tar -cf - --exclude='./hf_space_sync' --exclude='./.git' . | (cd hf_space_sync && tar -xf -)
-            
-            cd hf_space_sync
-            echo "📝 檢查是否有任何更新..."
-            git add -A
-            if git status --porcelain | grep -q .; then
-              echo "📝 偵測到有檔案更新，正在建立 Fast-Forward 提交..."
-              git commit -m "deploy: sync from GitHub Actions [skip ci]"
-              
-              echo "🚀 正在推送 Fast-Forward 提交至 Hugging Face Spaces main 分支..."
-              if git push origin main 2>git_push_error.log; then
-                echo "🎉 [方法 A] 成功以 Fast-Forward 模式部署至 main 分支！"
-                DEPLOY_SUCCESS=true
-              else
-                echo "⚠️ [方法 A] 推送失敗，錯誤如下："
-                cat git_push_error.log
-              fi
-            else
-              echo "😴 檔案內容無任何變更，略過部署。"
-              DEPLOY_SUCCESS=true
-            fi
-            
-            cd ..
-            rm -rf hf_space_sync
           else
-            echo "⚠️ [方法 A] 複製失敗（可能 Space 剛建立或尚未初始化），錯誤如下："
-            cat git_clone_error.log
+            echo "# Web Sandbox Testing" >> temp_readme.md
           fi
+          mv temp_readme.md README.md
 
-          if [ "$DEPLOY_SUCCESS" = "false" ]; then
-            echo "🔄 [方法 B] 嘗試使用 Force-Push 來覆寫 (通常僅適用於無 Branch Protection 或初始化階段)..."
-            if git push --force "$HF_REPO_URL" HEAD:main 2>git_push_b_error.log; then
-              echo "🎉 [方法 B] Force-Push 至 main 成功！"
-              DEPLOY_SUCCESS=true
-            else
-              echo "⚠️ [方法 B] Force-Push 至 main 失敗，錯誤如下："
-              cat git_push_b_error.log
-            fi
-          fi
-
-          if [ "$DEPLOY_SUCCESS" = "false" ]; then
-            echo "🔄 [方法 C] 嘗試直接 Force-Push 至 master 分支作為備份..."
-            if git push --force "$HF_REPO_URL" HEAD:master 2>git_push_c_error.log; then
-              echo "🎉 [方法 C] Push 至 master 成功！"
-              DEPLOY_SUCCESS=true
-            else
-              echo "⚠️ [方法 C] Push 至 master 失敗，錯誤如下："
-              cat git_push_c_error.log
-            fi
-          fi
-
-          if [ "$DEPLOY_SUCCESS" = "false" ]; then
-            echo "❌ 所有部署方法均失敗！請檢查 HF_TOKEN 是否具備 Write 權限，或 Hugging Face Space 是否存在。"
+          # 4. 設定 Git 使用者資訊並建立 Commit
+          git config --global user.email "deploy-bot@huggingface.co"
+          git config --global user.name "HuggingFace Deploy Bot"
+          
+          git config --global --unset-all credential.helper || true
+          
+          git add README.md
+          git commit -m "chore: inject hugging face configuration header [skip ci]" || true
+          
+          # 5. 直接推送最新代碼至 Hugging Face Spaces (shaohan-webdesign/web-sandbox-testing) main 分支
+          echo "🚀 正在推送最新程式碼至 Hugging Face Space main 分支..."
+          HF_REPO_URL="https://oauth2:${CLEANED_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing"
+          
+          if git push --force "$HF_REPO_URL" HEAD:main 2>git_push_error.log; then
+            echo "🎉 恭喜！已成功成功推送部署至 Hugging Face Space main 分支！"
+          else
+            echo "❌ 部署失敗！錯誤訊息如下："
+            cat git_push_error.log
+            echo ""
+            echo "================================================================"
             echo "💡 【如何排查與解決驗證失敗或路徑問題】"
             echo "================================================================"
             echo "1. 您的 HF_TOKEN 權限（最常見原因）："
-            echo "   👉 請前往 Hugging Face 官網 -> 您的右上角頭像 -> Settings -> Access Tokens"
-            echo "   👉 請檢查您所複製的 Token！它的角色 (Role) 必須是 'Write' (寫入權限)。"
-            echo "   👉 如果它是 'Read' (唯讀)，請新增一個 Role 為 'Write' 的 Token，並貼到 GitHub Secrets 中。"
-            echo ""
+            echo "   👉 請確認此 Token 在 Hugging Face 申請時具有 'Write' (寫入) 權限，而不是 'Read'。"
             echo "2. 檢查 GitHub Secret 設定："
-            echo "   👉 請前往您的 GitHub 儲存庫 -> Settings -> Secrets and variables -> Actions"
-            echo "   👉 請確認下方那格 'Repository secrets' 中有 HF_TOKEN。"
-            echo "   👉 請不要儲存到 'Environment secrets' 中（除非有設定環境）。"
-            echo ""
-            echo "3. 檢查 Space 是否存在："
-            echo "   👉 請確認您的 Space 完整路徑為: shaohan-webdesign/web-sandbox-testing"
-            echo "   👉 若您改過 Space 名稱，請通知我修改此 YML 檔。"
+            echo "   👉 請確認 GitHub 專案 Settings -> Secrets and variables -> Actions 中有一項名為 'HF_TOKEN' 的 Secret。"
+            echo "3. 檢查 Space 的存在與名稱："
+            echo "   👉 請確認您的 Space 名稱是否與 'shaohan-webdesign/web-sandbox-testing' 完全相符。"
             echo "================================================================"
             exit 1
           fi
