@@ -42,6 +42,36 @@ jobs:
           # 解決可能的 credential 衝突
           git config --global --unset-all credential.helper || true
           
+          # 3.5. 常態性檢查與注入 Hugging Face YAML Frontmatter 到 README.md
+          # 避免 AI Studio 在匯出/同步到 GitHub 時，自動覆寫 README.md 並洗掉部署 YAML
+          if [ -f README.md ] && grep -q "sdk: docker" README.md; then
+            echo "✅ README.md 已經含有適當的 Hugging Face 設定，保留原樣。"
+          else
+            echo "📝 偵測到 README.md 缺少 Hugging Face YAML 開頭區塊，正在為其注入..."
+            cat << 'EOF' > temp_readme.md
+---
+title: Web Sandbox Testing
+emoji: 🚀
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
+EOF
+            if [ -f README.md ]; then
+              cat README.md >> temp_readme.md
+            else
+              echo "# Web Sandbox Testing" >> temp_readme.md
+            fi
+            mv temp_readme.md README.md
+            
+            git add README.md
+            git commit -m "chore: inject hugging face configuration header [skip ci]" || true
+            echo "✅ README.md 已成功注入 YAML Frontmatter 並完成本地提交！"
+          fi
+
           echo "ℹ️ 正在推送至 Hugging Face Space (shaohan-webdesign/web-sandbox-testing)..."
           
           # 4. 嘗試進行推送，使用 oauth2 作為使用者名稱（這是 Hugging Face 官方最推薦、最穩定的 Git 驗證格式）
