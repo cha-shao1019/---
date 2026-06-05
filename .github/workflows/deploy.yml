@@ -48,12 +48,29 @@ jobs:
           # 這可以避免因為帳號名稱包含連字號（如 shaohan-webdesign）或與 Token 擁有者不一致而導致的驗證失敗 (Exit Code 128)
           echo "🚀 正在使用 oauth2 協議推送至 Hugging Face Space (shaohan-webdesign/web-sandbox-testing)..."
           
-          if ! git push --force "https://oauth2:${CLEANED_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing" HEAD:main 2>git_error.log; then
-            echo "❌ 部署失敗！Git 錯誤如下："
-            cat git_error.log
-            echo ""
-            echo "================================================================"
-            echo "💡 【如何排查與解決 Exit Code 128 / 驗證失敗問題】"
+          echo "🚀 嘗試推送至 main 分支..."
+          PUSH_MAIN_OK=true
+          if ! git push --force "https://oauth2:${CLEANED_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing" HEAD:main 2>git_main_error.log; then
+            PUSH_MAIN_OK=false
+            echo "⚠️ 推送至 main 分支時出現錯誤："
+            cat git_main_error.log
+          else
+            echo "✅ 成功推送到 main 分支！"
+          fi
+
+          echo "🚀 嘗試推送至 master 分支..."
+          PUSH_MASTER_OK=true
+          if ! git push --force "https://oauth2:${CLEANED_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing" HEAD:master 2>git_master_error.log; then
+            PUSH_MASTER_OK=false
+            echo "⚠️ 推送至 master 分支時出現錯誤："
+            cat git_master_error.log
+          else
+            echo "✅ 成功推送到 master 分支！"
+          fi
+
+          if [ "$PUSH_MAIN_OK" = "false" ] && [ "$PUSH_MASTER_OK" = "false" ]; then
+            echo "❌ 兩個分支的部署皆失敗！"
+            echo "💡 【如何排查與解決驗證失敗或路徑問題】"
             echo "================================================================"
             echo "1. 您的 HF_TOKEN 權限（最常見原因）："
             echo "   👉 請前往 Hugging Face 官網 -> 您的右上角頭像 -> Settings -> Access Tokens"
@@ -72,5 +89,5 @@ jobs:
             exit 1
           fi
           
-          echo "🎉 恭喜！推送至 Hugging Face Space 成功！"
+          echo "🎉 恭喜！已完成推送！"
 
