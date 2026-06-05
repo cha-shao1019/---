@@ -110,18 +110,18 @@ ${probe.htmlSnippets}
 =========================================
 DO NOT assume every website is a scam or a threat! You must separate LEGITIMATE/SAFE websites from REAL PHISHING/MALICIOUS sites.
 
-1. ✅ LEGITIMATE & SAFE WEBSITES (常規安全網站 / 正常個人網站 / 官方入口 / 部落格):
-   - Criteria: The website layout, URL, domain, or DOM content is standard, informative, OR the domain is the EXACT official domain of a Taiwanese brand (e.g. "line.me", "cubetw.com.tw", "cathaybk.com.tw", "post.gov.tw", "gov.tw", "github.com", "google.com", etc.), OR it is simply a standard personal showcase/home Page/blog showing custom portfolio, with NO signs of brand impersonation, deceptive bank-login layout, or aggressive mobile payment OTP fraud.
+1. ✅ LEGITIMATE & SAFE WEBSITES (常規安全網站 / 正常個人、企業網站 / 官方入口 / 部落格 / 作品集):
+   - Criteria: The website layout, URL, domain, or DOM content is standard, informative, OR the domain is the EXACT official domain of a Taiwanese brand (e.g. "line.me", "cubetw.com.tw", "cathaybk.com.tw", "post.gov.tw", "gov.tw", "github.com", "google.com", etc.), OR it is simply a standard personal showcase/home Page/blog showing custom portfolio, or a normal company web site (e.g. web design agency, tech agency, dental clinic, lawyer site), with NO signs of brand impersonation, deceptive bank-login layout, or aggressive mobile payment OTP fraud.
    - Outputs:
-     - threatScore: MUST be very low (between 0 and 15, ideally 0-5 for official platforms).
+     - threatScore: MUST be very low (between 0 and 15, ideally 0-5 for official platforms/safe personal or business sites).
      - verdict: "SAFE".
      - category: "Safe / Informational".
      - mismatchedBrand: "None".
-     - summary: Write a highly objective, polite, professional, and positive review in Traditional Chinese (繁體中文). Explain that "經沙盒智慧分析，此網域/網頁結構正常且安全，未發現任何冒用知名品牌、偽裝首頁、釣魚驗證表單或跨站惡意 API 行為。網站能防禦惡意嗅探，可安全瀏覽。"
-     - threatAnalysis: Set standard explanatory text of safe structures. The entries (domainRisk, credentialHarvest, urgencyManipulation, unauthorizedMimicry) must explicitly state "無此威脅/結構安全/域名信譽正常".
+     - summary: Write a highly objective, polite, professional, and positive review in Traditional Chinese (繁體中文). Explain that "經沙盒智慧分析，此網域/網頁結構為常規安全之資訊、個人作品集或企業網站，未發現任何冒用知名品牌、偽裝登入首頁、惡意扣款表單或跨站惡意 API 行為。網站能防禦惡意嗅探，可安全瀏覽。"
+     - threatAnalysis: Set standard explanatory text of safe structures. The entries (domainRisk, credentialHarvest, urgencyManipulation, unauthorizedMimicry) must explicitly state "無此威脅/結構安全/域名信譽良好且無敏感特徵冒用" 或 "常規官方網站網址/無任何安全威脅指標".
      - systemReport: "apiCallsDetected" MUST NOT contain fake evil domains! Set it as empty [] or only realistic static tracking/hosting endpoints if visible in raw scrape clues. "apkPayloadDetected" must be false.
-     - visualMockup: Draw a normal, beautiful, and realistic mockup based on the HTML metadata/title (e.g., standard blog, portfolio, or landing page). For mock 'elements', do NOT include fake input fields demanding OTP or credit card credentials unless they actually exist. Use normal nav links, buttons, or heading texts. Their 'hazardSeverity' MUST be "none" (or "low" at most for standard public inputs), and their 'riskLabel' should be reassuringly neutral, e.g., "常規網頁連結，與安全服務器傳輸，無威脅" or "安全按鈕".
-     
+     - visualMockup: Draw a normal, beautiful, and realistic mockup based on the HTML metadata/title (e.g., standard blog, portfolio, or landing page). For mock 'elements', do NOT include fake input fields demanding OTP or credit card credentials unless they actually exist. Use normal nav links, buttons, or heading texts. Their 'hazardSeverity' MUST be "none" (or "low" at most for standard public inputs), and their 'riskLabel' should be reassuringly neutral, e.g., "常規網頁連結，與安全伺服器傳輸，無威脅" or "常規安全按鈕".
+
 2. ⚠️ SUSPICIOUS / EXTREME PHISHING WEBSITES (真實釣魚或惡意網站):
    - Criteria: The URL mimics a well-known brand but is hosted on a mismatching, suspicious domain (e.g., "cathaybk-verification.top", "line-pay-login.xyz", "taiwan-post-office-parcel.cc", "gov-tw-tax.work", etc.), AND/OR the page aggressively demands inputs of sensitive data like OTP (簡訊驗證碼), Bank login details (網銀代號/密碼), Identity Cards (身分證字號), or complete Credit Card numbers + CVV with high urgency and threat words ("若不更正將即刻扣款/解除合約").
    - Outputs:
@@ -133,6 +133,11 @@ DO NOT assume every website is a scam or a threat! You must separate LEGITIMATE/
      - threatAnalysis: Fill in real expert breakdown of faking elements.
      - systemReport: Simulate potential malicious API endpoints (redirect chains, leak points).
      - visualMockup: Reconstruct the phishing layout highlighting the hazardous form inputs, and provide matching high-risk warnings, assigning "critical" or "high" to 'hazardSeverity', with explicit "riskLabel" warning details in Traditional Chinese.
+
+3. 🚫 PREVENTION OF FALSE POSITIVES (避免常規登入或聯絡表單誤判關鍵原則):
+   - A standard user login page, administrator login (such as WordPress, Shopify, standard SaaS portal, custom client portal login), contact form (demanding Name, Phone number for standard callback/inquiries), or newsletter subscription form on a normal business/personal domain is NOT malicious!
+   - You MUST NOT classify a website as malicious (MALICIOUS/CRITICAL_THREAT) simply because it contains a standard login input, search bar, contact form, or email sign-up. It is only phishing if there is clear EVIDENCE of brand mimicry (such as a cheap replica of LINE Pay, Cathay Bank, Shopee, Post Office, or Government tax sites) or deceptive layout targeting credential theft under fake branding, or requests of high-risk OTP / Bank PINs / Complete credit card numbers + CVV without a merchant invoice context.
+   - If a website is unreachable (due to network timeout/blocked connection) but has a standard domain name with NO obvious scam indicators (e.g. a business/portfolio domain like .com, .tw, .io), you MUST assume it is a SAFE but currently offline/inaccessible site. Assign a threatScore = 0 and verdict = "SAFE".
 
 Ensure the final JSON is perfectly valid. Do not inject any markdown wrap (such as \`\`\`json) before or after the JSON.
 `;

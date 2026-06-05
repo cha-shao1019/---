@@ -29,10 +29,13 @@ jobs:
           # 2. 自動檢查 Token 長度與格式，提供友善警告
           CLEANED_TOKEN=$(echo -n "$HF_TOKEN" | tr -d '\r\n[:space:]')
           
-          if [[ ! "$CLEANED_TOKEN" =~ ^hf_ ]]; then
-            echo "⚠️ 警告：您的 HF_TOKEN 似乎不是以 'hf_' 開頭，這通常是 Hugging Face Access Token 的格式。"
-            echo "💡 請確認您複製的是完整的 Token，並且沒有不小心貼成其他字串（例如 Space 的 URL 或 Username）。"
-          fi
+          case "$CLEANED_TOKEN" in
+            hf_*) ;;
+            *)
+              echo "⚠️ 警告：您的 HF_TOKEN 似乎不是以 'hf_' 開頭，這通常是 Hugging Face Access Token 的格式。"
+              echo "💡 請確認您複製的是完整的 Token，並且沒有不小心貼成其他字串（例如 Space 的 URL 或 Username）。"
+              ;;
+          esac
           
           # 3. 確保 README.md 包含正確的 Hugging Face YAML Frontmatter
           # 避免 AI Studio 在導出/同步到 GitHub 時，自動覆寫 README.md 並洗掉部署 YAML
