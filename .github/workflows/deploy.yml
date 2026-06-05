@@ -18,21 +18,58 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # 1. 檢查 HF_TOKEN 是否有設定（防止 Secret 設定錯誤或打錯字）
+          # 1. 檢查 HF_TOKEN 是否存在
           if [ -z "$HF_TOKEN" ]; then
-            echo "❌ 錯誤：找不到 HF_TOKEN。請確認您已在 GitHub 專案的 Settings -> Secrets and variables -> Actions 中新增名為 HF_TOKEN 的 Repository Secret。"
+            echo "❌ 錯誤：在 GitHub Actions 中找不到 HF_TOKEN 機密！"
+            echo "💡 請在您的 GitHub 專案中，前往: Settings -> Secrets and variables -> Actions -> Repository secrets"
+            echo "並新增一個名稱為 'HF_TOKEN' 的 Secret，且其內容應為在 Hugging Face 申請的 Write 權限 Token。"
             exit 1
           fi
           
-          # 2. 設定 Git 使用者資訊
+          # 2. 自動檢查 Token 長度與格式，提供友善警告
+          # 移除可能不小心複製進來的換行或空白
+          CLEANED_TOKEN=$(echo -n "$HF_TOKEN" | tr -d '\r\n[:space:]')
+          
+          if [[ ! "$CLEANED_TOKEN" =~ ^hf_ ]]; then
+            echo "⚠️ 警告：您的 HF_TOKEN 似乎不是以 'hf_' 開頭，這通常是 Hugging Face Access Token 的格式。"
+            echo "💡 請確認您複製的是完整的 Token，並且沒有不小心貼成其他字串（例如 Space 的 URL 或 Username）。"
+          fi
+          
+          # 3. 設定 Git 使用者資訊
           git config --global user.email "deploy-bot@huggingface.co"
           git config --global user.name "HuggingFace Deploy Bot"
           
-          echo "ℹ️ 正在準備推送至 Hugging Face Space..."
+          # 解決可能的 credential 衝突
+          git config --global --unset-all credential.helper || true
           
-          # 3. 使用 oauth2 為使用者名稱進行推送，這在 Hugging Face API Token 中最為穩定
-          # 這可以避免因使用者名稱大小寫或特殊字元造成的驗證失敗
-          git push --force "https://oauth2:${HF_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing" HEAD:main
+          echo "ℹ️ 正在推送至 Hugging Face Space (shaohan-webdesign/web-sandbox-testing)..."
           
-          echo "🎉 推送完成！"
+          # 4. 嘗試進行推送，這裏我們使用 shaohan-webdesign 作為使用者名稱進行連線（此為官方最推薦、最穩定的寫法）
+          # 如果推送失敗，藉由 capture 錯誤來輸出極為詳盡的中文排查說明
+          if ! git push --force "https://shaohan-webdesign:${CLEANED_TOKEN}@huggingface.co/spaces/shaohan-webdesign/web-sandbox-testing" HEAD:main 2>git_error.log; then
+            echo "❌ 部署失敗！Git 錯誤如下："
+            cat git_error.log
+            echo ""
+            echo "================================================================"
+            echo "💡 【如何排查與解決 Exit Code 128 / 驗證失敗問題】"
+            echo "================================================================"
+            echo "1. 檢查 HF_TOKEN 的權限角色 (Role)："
+            echo "   - 請前往 Hugging Face 官網 -> 您的右上角頭像 -> Settings -> Access Tokens"
+            echo "   - 查看您所使用的 Token。它的類型必須是 'Write' (寫入權限)。"
+            echo "   - 如果您使用的是 Fine-grained (細粒度) Token，請確認它有勾選 'Write access to Spaces' 權限。"
+            echo "   - 如果權限是 'Read' (唯讀)，將無法推送到 Space，進而導致 128 128 錯誤。"
+            echo ""
+            echo "2. 檢查 GitHub Secret 設定："
+            echo "   - 請確保您是在 GitHub 'Repository secrets'（儲存庫金鑰）中新增 HF_TOKEN"
+            echo "   - 請「不要」存成 Environment Secret 或 Variable，因為那可能需要設定 environment 才能讀取。"
+            echo "   - 儲存時請確認前後沒有多餘的空格、換行，一定要完全一致。"
+            echo ""
+            echo "3. 檢查 Space 名稱與路徑："
+            echo "   - 目前設定的 Space 為: shaohan-webdesign/web-sandbox-testing"
+            echo "   - 請確認您在 Hugging Face 建立的物件 ID 完全也就是這個，包含大小寫。"
+            echo "================================================================"
+            exit 1
+          fi
+          
+          echo "🎉 恭喜！推送至 Hugging Face Space 成功！"
 
