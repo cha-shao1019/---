@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install all dependencies including devDependencies to run build
-RUN npm ci
+RUN npm install
 
 # Copy application source code
 COPY . .
@@ -28,7 +28,7 @@ ENV PORT=7860
 COPY package*.json ./
 
 # Install ONLY production dependencies to keep the container lightweight
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 # Copy precompiled backend and frontend bundle files from builder state
 COPY --from=builder /app/dist ./dist
