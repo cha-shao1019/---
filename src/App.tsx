@@ -19,7 +19,8 @@ import {
   FileText, 
   MessageSquareWarning,
   BadgeAlert,
-  BookOpen
+  BookOpen,
+  X
 } from "lucide-react";
 import { AnalysisResult } from "./types";
 import SandboxBrowser from "./components/SandboxBrowser";
@@ -193,6 +194,7 @@ const PRESEEDED_TEMPLATES: AnalysisResult[] = [
 
 export default function App() {
   const [urlInput, setUrlInput] = useState("");
+  const [showHFGuide, setShowHFGuide] = useState(false);
   const [history, setHistory] = useState<AnalysisResult[]>([]);
   const [selectedResult, setSelectedResult] = useState<AnalysisResult | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -251,7 +253,14 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error("伺服器沙盒響應錯誤，請重試。");
+        let errMsg = "伺服器沙盒響應錯誤，請重試。";
+        try {
+          const errData = await response.json();
+          if (errData && errData.error) {
+            errMsg = `${errData.error} ${errData.details || ""}`;
+          }
+        } catch (_) {}
+        throw new Error(errMsg);
       }
 
       const result: AnalysisResult = await response.json();
@@ -335,6 +344,15 @@ export default function App() {
             <p className="text-xs text-brand-text-secondary max-w-xl font-sans leading-relaxed">
               防詐沙盒虛擬安全瀏覽器 — 雲端微型沙盒隔離引擎，協助安全重繪臺灣主流高頻詐騙與釣魚連結、提取隱蔽 API 與威脅特徵，保護實體主機免受瀏覽感染。
             </p>
+            <div className="pt-2 flex justify-center md:justify-start">
+              <button
+                type="button"
+                onClick={() => setShowHFGuide(true)}
+                className="inline-flex items-center space-x-1.5 text-[11px] text-[#ff4b4b] hover:text-[#ff3c3c] font-mono tracking-wider border border-[#ff4b4b]/20 hover:border-[#ff4b4b]/50 bg-[#ff4b4b]/5 px-3 py-1 rounded transition-all cursor-pointer uppercase select-none"
+              >
+                <span>🚀 Hugging Face 部署及排錯指引 (HF Spaces Guide)</span>
+              </button>
+            </div>
           </div>
 
           {/* Quick learning card */}
@@ -490,6 +508,128 @@ export default function App() {
         </footer>
 
       </div>
+
+      {/* Hugging Face Spaces Troubleshooter Guide Modal */}
+      {showHFGuide && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-[#0e0e10] border border-brand-border rounded-lg max-w-2xl w-full p-6 relative overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-brand-border">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-[#ff4b4b] animate-pulse" />
+                <h3 className="font-serif text-sm md:text-base font-bold tracking-tight text-brand-text-primary">
+                  HUGGING FACE SPACES 部署與自我診斷指南
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHFGuide(false)}
+                className="text-brand-text-secondary hover:text-brand-text-primary transition-colors p-1 rounded hover:bg-white/5 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto py-5 space-y-6 font-sans text-xs leading-relaxed text-brand-text-secondary pr-1">
+              <p className="text-[13px] text-brand-text-primary leading-relaxed font-semibold">
+                如果您發現網站發布到 Hugging Face Spaces 後一直無法啟用或卡在 Building/Runtime Error，請依照以下步驟一一核對自我排除：
+              </p>
+
+              {/* Step 1 */}
+              <div className="space-y-2 bg-[#000]/60 p-4 border border-brand-border/40 rounded">
+                <h4 className="font-mono text-[#ff4b4b] font-bold uppercase tracking-wider text-[11px] flex items-center">
+                  <span className="bg-[#ff4b4b] text-black w-4 h-4 rounded-full inline-flex items-center justify-center text-[10px] mr-2 font-sans font-bold">1</span>
+                  HF_TOKEN 權限設定錯誤（最常見的失敗原因）
+                </h4>
+                <p className="pl-6 leading-relaxed text-zinc-400">
+                  Hugging Face 的 Access Token 預設是 <strong>Read (唯讀)</strong>。唯讀 Token 無法讓 GitHub Actions 推送代碼至 Space，會引發 <code>403 Forbidden</code> 錯誤。
+                </p>
+                <div className="pl-6 pt-1 text-brand-accent-safe font-mono text-[11px] space-y-1">
+                  <p>👉 <strong>修復方式</strong>：前往 Hugging Face 個人設定 ➜ <strong>Access Tokens</strong> ➜ 點選建立或修改您的 Token，一定要將權限設為 <strong>Write (可寫入/寫入)</strong> 權限，再將其複製到 GitHub Secrets 覆蓋。</p>
+                </div>
+              </div>
+
+              {/* Step 2 */}
+              <div className="space-y-2 bg-[#000]/60 p-4 border border-brand-border/40 rounded">
+                <h4 className="font-mono text-brand-accent-caution font-bold uppercase tracking-wider text-[11px] flex items-center">
+                  <span className="bg-brand-accent-caution text-black w-4 h-4 rounded-full inline-flex items-center justify-center text-[10px] mr-2 font-sans font-bold">2</span>
+                  確認是否在 GitHub 專案中貼對 Secret 名稱
+                </h4>
+                <p className="pl-6 leading-relaxed text-zinc-400">
+                  GitHub Actions 找不到密鑰時，會出現 <code>HF_TOKEN is missing</code> 的中斷報錯。
+                </p>
+                <div className="pl-6 pt-1 text-zinc-300 font-mono text-[11px] space-y-1.5 leading-relaxed">
+                  <p>👉 <strong>修復步驟</strong>：</p>
+                  <ol className="list-decimal pl-4 space-y-1">
+                    <li>前往 GitHub 您的 Repository 主頁。</li>
+                    <li>點擊頂部選單 <strong>Settings</strong> ➜ 左側 <strong>Secrets and variables</strong> ➜ <strong>Actions</strong>。</li>
+                    <li>點選 <strong>New repository secret</strong>。</li>
+                    <li><strong>Name</strong> 填寫：<code className="text-white bg-zinc-800 px-1 py-0.5 rounded">HF_TOKEN</code>。</li>
+                    <li><strong>Secret</strong> 貼上在第 1 步取得的 Hugging Face <strong>Write Token</strong>。</li>
+                  </ol>
+                </div>
+              </div>
+
+              {/* Step 3 */}
+              <div className="space-y-2 bg-[#000]/60 p-4 border border-brand-border/40 rounded">
+                <h4 className="font-mono text-brand-text-primary font-bold uppercase tracking-wider text-[11px] flex items-center">
+                  <span className="bg-zinc-800 text-white w-4 h-4 rounded-full inline-flex items-center justify-center text-[10px] mr-2 font-sans font-bold">3</span>
+                  確認 Hugging Face Spaces 項目名稱與個人網址
+                </h4>
+                <p className="pl-6 leading-relaxed text-zinc-400">
+                  原系統預設的部署路徑是您之前的項目：<code>shaohan-webdesign/web-sandbox-testing</code>。<br />
+                  若您當前 Hugging Face 的<strong>使用者帳號名稱</strong>（或組織名稱）或 <strong>Space名稱</strong>已修改，GitHub 推送會回報 <code>Repository not found</code>。
+                </p>
+                <div className="pl-6 pt-1.5 text-brand-accent-caution font-mono text-[11px] space-y-2">
+                  <p>👉 <strong>修改方式</strong>：</p>
+                  <p className="leading-relaxed">
+                    請至 AI Studio 程式碼編輯器中，開啟 <code>/.github/workflows/deploy.yml</code> 檔案，在第 93 行左右：
+                  </p>
+                  <pre className="text-white bg-black/90 p-2.5 rounded border border-brand-border text-[10px] whitespace-pre-wrap leading-relaxed overflow-x-auto">
+                    HF_REPO_URL="https://oauth2:$&#123;CLEANED_TOKEN&#125;@huggingface.co/spaces/<span className="text-yellow-400 font-bold">[您的HF使用者名稱]</span>/<span className="text-yellow-400 font-bold">[您的Space項目名稱]</span>"
+                  </pre>
+                  <p className="leading-relaxed text-zinc-400">將其中的帳號、儲存庫（如 <code>shaohan-webdesign/web-sandbox-testing</code>）改成您的設定，Commit 並 Push 即可順利對接部署！</p>
+                </div>
+              </div>
+
+              {/* Step 4 */}
+              <div className="space-y-2 bg-[#000]/60 p-4 border border-brand-border/40 rounded">
+                <h4 className="font-mono text-zinc-400 font-bold uppercase tracking-wider text-[11px] flex items-center">
+                  <span className="bg-zinc-600 text-black w-4 h-4 rounded-full inline-flex items-center justify-center text-[10px] mr-2 font-sans font-bold">4</span>
+                  確保 Space 的 SDK 選擇的是 Docker（重要）
+                </h4>
+                <p className="pl-6 leading-relaxed text-zinc-400">
+                  由於本多功能隔離防詐分析工具需要 Node.js/Express 伺服器進行雙向中立安全探查，因此<b>不支援</b>靜態 HTML 或 Gradio/Streamlit 模板。
+                </p>
+                <div className="pl-6 pt-1 text-zinc-300 font-mono text-[11px] leading-relaxed">
+                  <p>👉 點選 Hugging Face Spaces 主頁的 <strong>Settings</strong> ➜ 確認 <strong>SDK</strong> 被選定或修改為 <strong>Docker</strong>。如果在一開始建立 Space 時沒有選 Docker，可以重新建立一個 Space 並指定 SDK 為 Docker。</p>
+                </div>
+              </div>
+
+              {/* Manual Backup option */}
+              <div className="border border-brand-border rounded p-3 bg-brand-surface text-zinc-400">
+                <p className="font-bold text-white mb-1 font-serif">💡 備用手動更新方案：</p>
+                <p className="leading-relaxed text-[11px]">
+                  若 GitHub Actions 部署有時效，您可以直接登入 Hugging Face Spaces 網頁，點選 <strong>Files</strong> 分頁 ➜ 點選 <strong>README.md</strong> ➜ 手動覆寫檔案或直接編輯將最頂端的 YAML Frontmatter 配好，Space 就會自動根據專案內的 Dockerfile 重新打包部署。
+                </p>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="pt-4 border-t border-brand-border flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowHFGuide(false)}
+                className="bg-brand-text-primary hover:bg-neutral-200 text-brand-bg font-bold font-mono text-xs px-5 py-2.5 rounded transition-all cursor-pointer uppercase select-none"
+              >
+                CLOSE DIAGNOSTICS
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

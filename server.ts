@@ -21,12 +21,56 @@ const ai = new GoogleGenAI({
   },
 });
 
+// Linear HTML cleaner to prevent RegExp backtracking lockups (ReDoS) on large complex sites
+function safeCleanHtml(html: string): string {
+  let result = html;
+  
+  // 1. Strip <script>...</script> nodes safely using loop-based index search
+  while (true) {
+    const lower = result.toLowerCase();
+    const startIdx = lower.indexOf("<script");
+    if (startIdx === -1) break;
+    
+    const endIdx = lower.indexOf("</script>", startIdx);
+    if (endIdx === -1) {
+      // Unclosed script tag, truncate from here to prevent further pollution
+      result = result.substring(0, startIdx) + "[UNCLOSED SCRIPT BLOCKED]";
+      break;
+    }
+    result = result.substring(0, startIdx) + "[SCRIPT BLOCKED]" + result.substring(endIdx + 9);
+  }
+
+  // 2. Strip <style>...</style> nodes safely using loop-based index search
+  while (true) {
+    const lower = result.toLowerCase();
+    const startIdx = lower.indexOf("<style");
+    if (startIdx === -1) break;
+    
+    const endIdx = lower.indexOf("</style>", startIdx);
+    if (endIdx === -1) {
+      // Unclosed style tag, truncate from here
+      result = result.substring(0, startIdx) + "[UNCLOSED STYLE BLOCKED]";
+      break;
+    }
+    result = result.substring(0, startIdx) + "[STYLE BLOCKED]" + result.substring(endIdx + 8);
+  }
+
+  return result;
+}
+
 // Helper to fetch website elements safely
 async function probeUrl(targetUrl: string): Promise<{ isReachable: boolean; htmlSnippets: string }> {
+  let timeoutId: NodeJS.Timeout | undefined;
   try {
     const formattedUrl = targetUrl.startsWith("http") ? targetUrl : `https://${targetUrl}`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000); // 4-second timeout max
+    
+    // Set a robust budget of 5 seconds for BOTH connection and full body content transfer in sandbox.
+    timeoutId = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch (e) {}
+    }, 5000);
 
     const res = await fetch(formattedUrl, {
       method: "GET",
@@ -47,39 +91,106 @@ async function probeUrl(targetUrl: string): Promise<{ isReachable: boolean; html
       },
       signal: controller.signal,
     });
-    
-    clearTimeout(timeoutId);
 
     const contentType = res.headers.get("content-type") || "";
-    if (res.ok && (contentType.includes("text/html") || contentType.includes("text/plain"))) {
+    const isHtmlOrText = contentType.includes("text/html") || contentType.includes("text/plain") || contentType.includes("application/xhtml+xml");
+
+    if (isHtmlOrText) {
+      // res.text() can take very long for large sites; it is fully protected by our still-active timeout controller now!
       const text = await res.text();
-      // Extract title, meta tags, and form fields to keep prompt fast and useful
-      const htmlCleaned = text
-        .slice(0, 15000) // limit size
-        .replace(/<script[^>]*>([\s\S]*?)<\/script>/gi, "[SCRIPT BLOCKED]") // strip actual code
-        .replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, "[STYLE BLOCKED]"); // strip styles
+      
+      // Clean up scripts and styles from the first 50,000 characters of raw input,
+      // then take the cleaned 10,000 characters. This avoids bloated payload while maintaining speed.
+      const rawSlice = text.slice(0, 50000);
+      const cleaned = safeCleanHtml(rawSlice);
+      const htmlCleaned = cleaned.slice(0, 8000);
 
       return {
-        isReachable: true,
+        isReachable: res.ok,
         htmlSnippets: `Status: ${res.status}. Headers: ${JSON.stringify(Array.from(res.headers.entries()))}. DOM preview (first 4000 chars): ${htmlCleaned.slice(0, 4000)}`,
       };
     }
 
     return {
-      isReachable: true,
+      isReachable: res.ok,
       htmlSnippets: `Reachable with HTTP ${res.status} but content type is ${contentType}.`,
     };
   } catch (err: any) {
+    const isAbort = err.name === "AbortError" || err.message?.includes("abort");
     return {
       isReachable: false,
-      htmlSnippets: `Unreachable: Error probing target: ${err.message || "Timeout/Connection refused"}`,
+      htmlSnippets: `Unreachable: Error probing target: ${isAbort ? "Request timed out after 5000ms download limit" : (err.message || "Connection refused")}`,
     };
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
+}
+
+// Robust retry and model fallback helper to prevent 503 errors and high-demand freezes
+async function generateContentWithRetry(prompt: string, schema: any, systemInstruction: string): Promise<any> {
+  const modelsToTry = [
+    { name: "gemini-3.5-flash", maxAttempts: 2 },
+    { name: "gemini-3.1-flash-lite", maxAttempts: 1 },
+    { name: "gemini-flash-latest", maxAttempts: 1 }
+  ];
+  let lastError: any = null;
+
+  for (const model of modelsToTry) {
+    const modelName = model.name;
+    const maxAttempts = model.maxAttempts;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        console.log(`[Gemini SDK] Calling Model: ${modelName} | Attempt: ${attempt}/${maxAttempts}`);
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: schema,
+          }
+        });
+        if (response && response.text) {
+          return response;
+        }
+        throw new Error("Empty response from Gemini API");
+      } catch (err: any) {
+        lastError = err;
+        const msg = err.message || JSON.stringify(err);
+        console.warn(`[Gemini Attempt Failed] Model: ${modelName} | Attempt ${attempt}/${maxAttempts}:`, msg);
+        
+        // If it's a client error (status 400-499, but not 429), try next model immediately
+        if (err.status && err.status >= 400 && err.status < 500 && err.status !== 429) {
+          break;
+        }
+
+        // Exponential backoff before retrying same model
+        if (attempt < maxAttempts) {
+          const delay = attempt * 1200;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+  }
+  throw lastError || new Error("Failed to generate content after repeating attempts and falling back.");
 }
 
 // API endpoint for analysis
 app.post("/api/sandbox/analyze", async (req, res) => {
   const { url: targetUrl } = req.body;
+
+  // 1. Check if Gemini API key is configured
+  if (!process.env.GEMINI_API_KEY) {
+    console.error("[Sandbox Error]: GEMINI_API_KEY is missing in environment variables!");
+    res.status(500).json({
+      error: "⚠️ 雲端託管服務未設定 GEMINI_API_KEY 環境變數。",
+      details: "請前往您的託管平台（如 Render 或是 Hugging Face Spaces）的 Environment Variables (環境變數) 設定頁面，新增一個名稱為 GEMINI_API_KEY 的變數，並將您的 Gemini API 金鑰填入。儲存並重新部署/重啟服務後，即可正常進行防詐網址分析！"
+    });
+    return;
+  }
 
   if (!targetUrl || typeof targetUrl !== "string") {
     res.status(400).json({ error: "Missing or invalid URL parameter." });
@@ -91,7 +202,26 @@ app.post("/api/sandbox/analyze", async (req, res) => {
     console.log(`[Sandbox] Analyzing URL: ${cleanUrl}`);
 
     // Dynamic website check
-    const probe = await probeUrl(cleanUrl);
+    const host = req.headers.host || "";
+    let probe;
+    
+    // Auto-detect loopback or self-analysis to avoid self-request hanging/deadlocking on single-concurrency hosting instances
+    const isSelfAnalysis = host && (
+      cleanUrl.includes(host) || 
+      cleanUrl.includes("localhost") || 
+      cleanUrl.includes("127.0.0.1") || 
+      cleanUrl.includes("0.0.0.0")
+    );
+
+    if (isSelfAnalysis) {
+      console.log(`[Sandbox] Self-analysis detected for host: ${host}. Bypassing external request to prevent loopback deadlock.`);
+      probe = {
+        isReachable: true,
+        htmlSnippets: `Status: 200. Headers: {"content-type": "text/html"}. DOM preview: <html><head><title>防詐沙盒虛擬安全瀏覽器 (SENTINEL SANDBOX)</title><meta name="description" content="雲端微型沙盒隔離引擎"></head><body><h1>SENTINEL SANDBOX</h1></body></html>`
+      };
+    } else {
+      probe = await probeUrl(cleanUrl);
+    }
 
     // Call Gemini to reconstruct the site behavior, layout and warnings with non-biased, dual-path assessment principles
     const prompt = `
@@ -138,119 +268,115 @@ DO NOT assume every website is a scam or a threat! You must separate LEGITIMATE/
    - A standard user login page, administrator login (such as WordPress, Shopify, standard SaaS portal, custom client portal login), contact form (demanding Name, Phone number for standard callback/inquiries), or newsletter subscription form on a normal business/personal domain is NOT malicious!
    - You MUST NOT classify a website as malicious (MALICIOUS/CRITICAL_THREAT) simply because it contains a standard login input, search bar, contact form, or email sign-up. It is only phishing if there is clear EVIDENCE of brand mimicry (such as a cheap replica of LINE Pay, Cathay Bank, Shopee, Post Office, or Government tax sites) or deceptive layout targeting credential theft under fake branding, or requests of high-risk OTP / Bank PINs / Complete credit card numbers + CVV without a merchant invoice context.
    - If a website is unreachable (due to network timeout/blocked connection) but has a standard domain name with NO obvious scam indicators (e.g. a business/portfolio domain like .com, .tw, .io), you MUST assume it is a SAFE but currently offline/inaccessible site. Assign a threatScore = 0 and verdict = "SAFE".
+   - CRITICAL DESIGN RULE: Under no circumstances should you invent or hallucinate fake sensitive or malicious input fields (such as '簡訊驗證碼 OTP', '信用卡號', '身分證字碼', '網銀密碼') or high-risk warnings for a normal company official website, web design agency, clinic website, dental clinic, school portal, portfolio, or blog. If the website contains standard inputs like name, phone, message (inquiring/contact form) or search/newsletter boxes, these are 100% normal and safe! You must output a normal, beautiful visual mockup with standard elements (nav links, regular text inputs, search button) with hazardSeverity = 'none' and non-alarmist descriptions.
 
 Ensure the final JSON is perfectly valid. Do not inject any markdown wrap (such as \`\`\`json) before or after the JSON.
 `;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: "You represent a Secure Sandbox Simulation Engine in Taiwan. Respond exclusively using valid and strict JSON that conforms exactly to the database schema. All explanations, summaries, riskLabels, and suggestions MUST be crafted in highly professional Traditional Chinese (繁體中文).",
-        responseMimeType: "application/json",
-        responseSchema: {
+    const systemInstruction = "You represent a Secure Sandbox Simulation Engine in Taiwan. Respond exclusively using valid and strict JSON that conforms exactly to the database schema. All explanations, summaries, riskLabels, and suggestions MUST be crafted in highly professional Traditional Chinese (繁體中文).";
+
+    const responseSchema = {
+      type: Type.OBJECT,
+      required: [
+        "isReachable",
+        "threatScore",
+        "verdict",
+        "category",
+        "mismatchedBrand",
+        "summary",
+        "threatAnalysis",
+        "systemReport",
+        "sandboxConsoleLogs",
+        "visualMockup",
+        "safetyRecommendations"
+      ],
+      properties: {
+        isReachable: { type: Type.BOOLEAN },
+        threatScore: { type: Type.INTEGER, description: "Threat score between 0 (fully safe) and 100 (lethal fraud/credential stealer)" },
+        verdict: { type: Type.STRING, description: "MUST be one of: SAFE, MILD_SUSPICION, MALICIOUS, CRITICAL_THREAT" },
+        category: { type: Type.STRING, description: "Scam category: 'Phishing Card' | 'Fake Shopping' | 'Account Impersonation' | 'Investment Scam' | 'Safe / Informational' | 'Unknown Suspicious'" },
+        mismatchedBrand: { type: Type.STRING, description: "Name of the Taiwanese brand being mimicked or 'None'" },
+        summary: { type: Type.STRING, description: "A detailed summary in Traditional Chinese explaining the mechanics of the scam, how it tricks users, and visual cues." },
+        threatAnalysis: {
           type: Type.OBJECT,
-          required: [
-            "isReachable",
-            "threatScore",
-            "verdict",
-            "category",
-            "mismatchedBrand",
-            "summary",
-            "threatAnalysis",
-            "systemReport",
-            "sandboxConsoleLogs",
-            "visualMockup",
-            "safetyRecommendations"
-          ],
+          required: ["domainRisk", "credentialHarvest", "urgencyManipulation", "unauthorizedMimicry"],
           properties: {
-            isReachable: { type: Type.BOOLEAN },
-            threatScore: { type: Type.INTEGER, description: "Threat score between 0 (fully safe) and 100 (lethal fraud/credential stealer)" },
-            verdict: { type: Type.STRING, description: "MUST be one of: SAFE, MILD_SUSPICION, MALICIOUS, CRITICAL_THREAT" },
-            category: { type: Type.STRING, description: "Scam category: 'Phishing Card' | 'Fake Shopping' | 'Account Impersonation' | 'Investment Scam' | 'Safe / Informational' | 'Unknown Suspicious'" },
-            mismatchedBrand: { type: Type.STRING, description: "Name of the Taiwanese brand being mimicked or 'None'" },
-            summary: { type: Type.STRING, description: "A detailed summary in Traditional Chinese explaining the mechanics of the scam, how it tricks users, and visual cues." },
-            threatAnalysis: {
-              type: Type.OBJECT,
-              required: ["domainRisk", "credentialHarvest", "urgencyManipulation", "unauthorizedMimicry"],
-              properties: {
-                domainRisk: { type: Type.STRING, description: "Analysis of the URL structure or domain registrations indicators" },
-                credentialHarvest: { type: Type.STRING, description: "Analysis of what private info is targeted (OTP, account IDs, payment credentials)" },
-                urgencyManipulation: { type: Type.STRING, description: "How the psychological urgency/coercion is played out" },
-                unauthorizedMimicry: { type: Type.STRING, description: "Visual and brand imitation aspects flagged" }
-              }
+            domainRisk: { type: Type.STRING, description: "Analysis of the URL structure or domain registrations indicators" },
+            credentialHarvest: { type: Type.STRING, description: "Analysis of what private info is targeted (OTP, account IDs, payment credentials)" },
+            urgencyManipulation: { type: Type.STRING, description: "How the psychological urgency/coercion is played out" },
+            unauthorizedMimicry: { type: Type.STRING, description: "Visual and brand imitation aspects flagged" }
+          }
+        },
+        systemReport: {
+          type: Type.OBJECT,
+          required: ["apiCallsDetected", "redirectChain", "permissionsRequested", "apkPayloadDetected", "apkPayloadName"],
+          properties: {
+            apiCallsDetected: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "Mock network destination/stealer api endpoints, e.g. /api/receive_otp"
             },
-            systemReport: {
-              type: Type.OBJECT,
-              required: ["apiCallsDetected", "redirectChain", "permissionsRequested", "apkPayloadDetected", "apkPayloadName"],
-              properties: {
-                apiCallsDetected: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: "Mock network destination/stealer api endpoints, e.g. /api/receive_otp"
-                },
-                redirectChain: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: "Simulated redirect hop list"
-                },
-                permissionsRequested: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: "IFrame or client permissions requested: camera, notification, location etc."
-                },
-                apkPayloadDetected: { type: Type.BOOLEAN, description: "Whether an automatic APK download is pushed" },
-                apkPayloadName: { type: Type.STRING, description: "Name of APK file if pushed, otherwise empty/null" }
-              }
+            redirectChain: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "Simulated redirect hop list"
             },
-            sandboxConsoleLogs: {
+            permissionsRequested: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "IFrame or client permissions requested: camera, notification, location etc."
+            },
+            apkPayloadDetected: { type: Type.BOOLEAN, description: "Whether an automatic APK download is pushed" },
+            apkPayloadName: { type: Type.STRING, description: "Name of APK file if pushed, otherwise empty/null" }
+          }
+        },
+        sandboxConsoleLogs: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            required: ["time", "action", "type"],
+            properties: {
+              time: { type: Type.STRING, description: "Time string e.g. '+0.1s'" },
+              action: { type: Type.STRING, description: "Simulated quarantine action log in 繁體中文" },
+              type: { type: Type.STRING, description: "Level of log: info, success, warning, danger" }
+            }
+          }
+        },
+        visualMockup: {
+          type: Type.OBJECT,
+          required: ["backgroundColor", "textColor", "brandName", "titleText", "subText", "elements"],
+          properties: {
+            backgroundColor: { type: Type.STRING, description: "Background hex code for styling mock iframe, e.g. #00c300" },
+            textColor: { type: Type.STRING, description: "Text hex code, e.g. #333333" },
+            brandName: { type: Type.STRING },
+            titleText: { type: Type.STRING },
+            subText: { type: Type.STRING },
+            elements: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
-                required: ["time", "action", "type"],
+                required: ["type", "label", "value", "riskLabel", "hazardSeverity"],
                 properties: {
-                  time: { type: Type.STRING, description: "Time string e.g. '+0.1s'" },
-                  action: { type: Type.STRING, description: "Simulated quarantine action log in 繁體中文" },
-                  type: { type: Type.STRING, description: "Level of log: info, success, warning, danger" }
+                  type: { type: Type.STRING, description: "logo | input | button | text | form_field | warning_overlay" },
+                  label: { type: Type.STRING, description: "Field instruction / heading text in Chinese" },
+                  value: { type: Type.STRING, description: "Sample fake input content or action label" },
+                  riskLabel: { type: Type.STRING, description: "An isolated security warning detail explaining fraud indicators in Traditional Chinese" },
+                  hazardSeverity: { type: Type.STRING, description: "none | low | high | critical" },
+                  placeholder: { type: Type.STRING, description: "Optional keyboard hint" }
                 }
               }
-            },
-            visualMockup: {
-              type: Type.OBJECT,
-              required: ["backgroundColor", "textColor", "brandName", "titleText", "subText", "elements"],
-              properties: {
-                backgroundColor: { type: Type.STRING, description: "Background hex code for styling mock iframe, e.g. #00c300" },
-                textColor: { type: Type.STRING, description: "Text hex code, e.g. #333333" },
-                brandName: { type: Type.STRING },
-                titleText: { type: Type.STRING },
-                subText: { type: Type.STRING },
-                elements: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    required: ["type", "label", "value", "riskLabel", "hazardSeverity"],
-                    properties: {
-                      type: { type: Type.STRING, description: "logo | input | button | text | form_field | warning_overlay" },
-                      label: { type: Type.STRING, description: "Field instruction / heading text in Chinese" },
-                      value: { type: Type.STRING, description: "Sample fake input content or action label" },
-                      riskLabel: { type: Type.STRING, description: "An isolated security warning detail explaining fraud indicators in Traditional Chinese" },
-                      hazardSeverity: { type: Type.STRING, description: "none | low | high | critical" },
-                      placeholder: { type: Type.STRING, description: "Optional keyboard hint" }
-                    }
-                  }
-                }
-              }
-            },
-            safetyRecommendations: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "What the user should do next, e.g. call 165反詐騙"
             }
           }
+        },
+        safetyRecommendations: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "What the user should do next, e.g. call 165反詐騙"
         }
       }
-    });
+    };
 
+    const response = await generateContentWithRetry(prompt, responseSchema, systemInstruction);
     const parsedData = JSON.parse(response.text || "{}");
     
     // Add unique node IDs for keys on client render
